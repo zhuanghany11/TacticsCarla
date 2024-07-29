@@ -72,6 +72,6 @@ def test_xodr_parser(map_path, img_path):
 
 if __name__ == "__main__":
     print("hello")
-    # test_xodr_parser("./carla_town/Town01.xodr",  "map.png")
+    test_xodr_parser("./carla_town/Town01.xodr",  "map.png")
     # test_xodr_parser("../tactics2d/tests/cases/XodrSamples/cross.xodr",  "map.png")
 
