@@ -1,5 +1,9 @@
 print("hello")
 
+import sys
+sys.path.append('/TacticsCarla/tactics2d')
+print(sys.path)
+
 import carla
 print("libcarla: ", carla)
 
@@ -11,7 +15,6 @@ print("tactics2d version: ", tactics2d.__version__)
 import xml.etree.ElementTree as ET
 
 import matplotlib.pyplot as plt
-
 from tactics2d.map.parser import OSMParser, XODRParser
 from tactics2d.traffic import ScenarioDisplay
 
@@ -69,6 +72,7 @@ def test_xodr_parser(map_path, img_path):
     # fig.show()
     plt.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
     plt.show()
+    # fig.savefig(img_path, facecolor="black")
 
 if __name__ == "__main__":
     print("hello")

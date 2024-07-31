@@ -10,7 +10,7 @@ XAUTH=/tmp/.docker.xauth
 XSOCK=/tmp/.X11-unix
 
 echo "Preparing Xauthority data..."
-xauth_list=$(xauth nlist :0 | tail -n 1 | sed -e 's/^..../ffff/')
+xauth_list=$(xauth nlist $DISPLAY | tail -n 1 | sed -e 's/^..../ffff/')
 if [ ! -f $XAUTH ]; then
     if [ ! -z "$xauth_list" ]; then
         echo $xauth_list | xauth -f $XAUTH nmerge -
