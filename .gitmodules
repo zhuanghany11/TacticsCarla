@@ -1,0 +1,3 @@
+[submodule "TacticsCarla"]
+	path = TacticsCarla
+	url = https://github.com/shuo-Liu/TacticsCarla.git
