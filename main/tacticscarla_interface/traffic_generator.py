@@ -30,19 +30,46 @@ class TrafficGenerator:
         self.all_id = []
         self.synchronous_master = False
         random.seed(args.seed if args.seed is not None else int(time.time()))
+        self.ego_vehicle = None
 
-        # @todo cannot import these directly.
         self.SpawnActor = carla.command.SpawnActor
         self.SetAutopilot = carla.command.SetAutopilot
         self.SetVehicleLightState = carla.command.SetVehicleLightState
         self.FutureActor = carla.command.FutureActor
+
+        self.world = self.setup()
+
+        # self.obs_size = 400
+        # # Collision sensor
+        # self.collision_hist = []  # The collision history
+        # self.collision_hist_l = 1  # collision history length
+        # self.collision_bp = self.world.get_blueprint_library().find('sensor.other.collision')
+        #
+        # # Lidar sensor
+        # self.lidar_data = None
+        # self.lidar_height = 2.1
+        # self.lidar_trans = carla.Transform(carla.Location(x=0.0, z=self.lidar_height))
+        # self.lidar_bp = self.world.get_blueprint_library().find('sensor.lidar.ray_cast')
+        # self.lidar_bp.set_attribute('channels', '32')
+        # self.lidar_bp.set_attribute('range', '5000')
+        #
+        # # Camera sensor
+        # self.camera_img = np.zeros((self.obs_size, self.obs_size, 3), dtype=np.uint8)
+        # self.camera_trans = carla.Transform(carla.Location(x=0.8, z=1.7))
+        # self.camera_bp = self.world.get_blueprint_library().find('sensor.camera.rgb')
+        # # Modify the attributes of the blueprint to set image resolution and field of view.
+        # self.camera_bp.set_attribute('image_size_x', str(self.obs_size))
+        # self.camera_bp.set_attribute('image_size_y', str(self.obs_size))
+        # self.camera_bp.set_attribute('fov', '110')
+        # # Set the time in seconds between sensor captures
+        # self.camera_bp.set_attribute('sensor_tick', '0.02')
+
 
     def setup(self):
         """
         Set up the simulation environment, including the traffic manager and world settings.
         """
 
-        # 加载特定的地图，例如 'Town03'
         self.client = carla.Client(self.args.host, self.args.port)
         self.client.set_timeout(10.0)
         self.client.load_world(self.args.map)
@@ -52,6 +79,7 @@ class TrafficGenerator:
         self._setup_traffic_manager()
         self._setup_world_settings()
         return self.world
+
 
 
     def _setup_traffic_manager(self):
@@ -196,6 +224,42 @@ class TrafficGenerator:
         print(f"Successfully spawned {len(self.vehicles_list)} vehicles.")
         return self.vehicles_list
 
+    def spawn_ego_vehicle(self, spawn_point=None):
+        """
+        Function to spawn an ego vehicle in the CARLA world.
+
+        Args:
+            spawn_point (carla.Transform, optional): The spawn point for the ego vehicle. If None, a random spawn point is chosen.
+
+        Returns:
+            carla.Vehicle: The spawned ego vehicle instance.
+        """
+        # Select a vehicle blueprint (e.g., 'model3' for Tesla Model 3)
+        vehicle_bp = self.world.get_blueprint_library().filter('model3')[0]
+
+        # Set role name for the ego vehicle
+        vehicle_bp.set_attribute('role_name', 'ego')
+
+        # Choose a spawn point
+        if spawn_point is None:
+            spawn_points = self.world.get_map().get_spawn_points()
+            spawn_point = spawn_points[0] if spawn_points else carla.Transform()
+
+        # Try to spawn the vehicle
+        ego_vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_point)
+
+        if ego_vehicle is not None:
+            print(f"Ego vehicle spawned at {spawn_point.location}")
+            # Optionally set autopilot or manual control
+            # ego_vehicle.set_autopilot(True)  # Uncomment if you want to use autopilot
+
+        else:
+            print("Failed to spawn ego vehicle. Trying another spawn point.")
+            ego_vehicle = None
+
+        self.ego_vehicle = ego_vehicle
+        return ego_vehicle
+
     def spawn_walkers(self):
         """Spawn walkers in CARLA.
 
@@ -334,7 +398,28 @@ class TrafficGenerator:
 
         return actors_info
 
+    def add_sensor(self, window_size, sensor_type, location, rotation, sensor_options):
+        """Function to add a sensor to the ego vehicle in the CARLA world.
 
+            Args:
+                window_size (tuple): The size of the window for the sensor's display, as a (width, height) pair.
+                sensor_type (str): The type of sensor to be added, e.g., 'RGBCamera', 'LiDAR', 'SemanticLiDAR'.
+                location (list/tuple): The location for the sensor as a [x, y, z] list or tuple, where
+                                        x is along the forward direction of the ego vehicle, y is lateral,
+                                        and z is the height above the ego vehicle.
+                rotation (list/tuple): The rotation for the sensor as a [pitch, yaw, roll] list or tuple,
+                                        specifying the rotation angles in degrees.
+                sensor_options (dict): Additional options for the sensor, such as sensor attributes or post-processing effects.
+
+            Returns:
+                carla.Sensor: The spawned sensor instance attached to the ego vehicle.
+            """
+
+        sensor = SensorManager(self.world, window_size, sensor_type,
+                      carla.Transform(carla.Location(x=location[0], z=location[2]),
+                                      carla.Rotation(yaw=rotation[1])),
+                      self.ego_vehicle, sensor_options)
+        return sensor
 
     def cleanup(self):
         """
@@ -348,6 +433,8 @@ class TrafficGenerator:
             settings.fixed_delta_seconds = None
             self.world.apply_settings(settings)
 
+        if self.ego_vehicle is not None:
+            self.vehicles_list.append(self.ego_vehicle.id)
         print('\ndestroying %d vehicles' % len(self.vehicles_list))
         self.client.apply_batch([carla.command.DestroyActor(x) for x in self.vehicles_list])
 
@@ -393,3 +480,178 @@ class TrafficGenerator:
         except:
             print("   Warning! Actor Generation is not valid. No actor will be spawned.")
             return []
+
+import pygame
+
+class CustomTimer:
+    def __init__(self):
+        try:
+            self.timer = time.perf_counter
+        except AttributeError:
+            self.timer = time.time
+
+    def time(self):
+        return self.timer()
+
+class SensorManager:
+    def __init__(self, world, window_size, sensor_type, transform, attached, sensor_options):
+        self.surface = None
+        self.world = world
+        self.window_size = window_size
+        self.sensor = self.init_sensor(sensor_type, transform, attached, sensor_options)
+        self.sensor_options = sensor_options
+        self.timer = CustomTimer()
+
+        self.time_processing = 0.0
+        self.tics_processing = 0
+
+
+    def init_sensor(self, sensor_type, transform, attached, sensor_options):
+        if sensor_type == 'RGBCamera':
+            camera_bp = self.world.get_blueprint_library().find('sensor.camera.rgb')
+            disp_size = self.window_size
+            camera_bp.set_attribute('image_size_x', str(disp_size[0]))
+            camera_bp.set_attribute('image_size_y', str(disp_size[1]))
+
+            for key in sensor_options:
+                camera_bp.set_attribute(key, sensor_options[key])
+
+            camera = self.world.spawn_actor(camera_bp, transform, attach_to=attached)
+            camera.listen(self.save_rgb_image)
+
+            return camera
+
+        elif sensor_type == 'LiDAR':
+            lidar_bp = self.world.get_blueprint_library().find('sensor.lidar.ray_cast')
+            lidar_bp.set_attribute('range', '100')
+            lidar_bp.set_attribute('dropoff_general_rate',
+                                   lidar_bp.get_attribute('dropoff_general_rate').recommended_values[0])
+            lidar_bp.set_attribute('dropoff_intensity_limit',
+                                   lidar_bp.get_attribute('dropoff_intensity_limit').recommended_values[0])
+            lidar_bp.set_attribute('dropoff_zero_intensity',
+                                   lidar_bp.get_attribute('dropoff_zero_intensity').recommended_values[0])
+
+            for key in sensor_options:
+                lidar_bp.set_attribute(key, sensor_options[key])
+
+            lidar = self.world.spawn_actor(lidar_bp, transform, attach_to=attached)
+
+            lidar.listen(self.save_lidar_image)
+
+            return lidar
+
+        elif sensor_type == 'SemanticLiDAR':
+            lidar_bp = self.world.get_blueprint_library().find('sensor.lidar.ray_cast_semantic')
+            lidar_bp.set_attribute('range', '100')
+
+            for key in sensor_options:
+                lidar_bp.set_attribute(key, sensor_options[key])
+
+            lidar = self.world.spawn_actor(lidar_bp, transform, attach_to=attached)
+
+            lidar.listen(self.save_semanticlidar_image)
+
+            return lidar
+
+        elif sensor_type == "Radar":
+            radar_bp = self.world.get_blueprint_library().find('sensor.other.radar')
+            for key in sensor_options:
+                radar_bp.set_attribute(key, sensor_options[key])
+
+            radar = self.world.spawn_actor(radar_bp, transform, attach_to=attached)
+            radar.listen(self.save_radar_image)
+
+            return radar
+
+        else:
+            return None
+
+    def get_sensor(self):
+        return self.sensor
+
+    def save_rgb_image(self, image):
+        t_start = self.timer.time()
+
+        image.convert(carla.ColorConverter.Raw)
+        array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+        array = np.reshape(array, (image.height, image.width, 4))
+        array = array[:, :, :3]
+        array = array[:, :, ::-1]
+
+
+        self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
+
+        t_end = self.timer.time()
+        self.time_processing += (t_end - t_start)
+        self.tics_processing += 1
+
+    def save_lidar_image(self, image):
+        t_start = self.timer.time()
+
+        disp_size = self.window_size
+        disp_size = (int(disp_size[0]), int(disp_size[1]))
+        lidar_range = 2.0 * float(self.sensor_options['range'])
+
+        points = np.frombuffer(image.raw_data, dtype=np.dtype('f4'))
+        points = np.reshape(points, (int(points.shape[0] / 4), 4))
+        lidar_data = np.array(points[:, :2])
+        lidar_data *= min(disp_size) / lidar_range
+        lidar_data += (0.5 * disp_size[0], 0.5 * disp_size[1])
+        lidar_data = np.fabs(lidar_data)  # pylint: disable=E1111
+        lidar_data = lidar_data.astype(np.int32)
+        lidar_data = np.reshape(lidar_data, (-1, 2))
+        lidar_img_size = (disp_size[0], disp_size[1], 3)
+        lidar_img = np.zeros((lidar_img_size), dtype=np.uint8)
+
+        lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
+
+
+        self.surface = pygame.surfarray.make_surface(lidar_img)
+
+        t_end = self.timer.time()
+        self.time_processing += (t_end - t_start)
+        self.tics_processing += 1
+
+    def save_semanticlidar_image(self, image):
+        t_start = self.timer.time()
+
+        disp_size = self.window_size
+        disp_size = (int(disp_size[0]), int(disp_size[1]))
+        lidar_range = 2.0 * float(self.sensor_options['range'])
+
+        points = np.frombuffer(image.raw_data, dtype=np.dtype('f4'))
+        points = np.reshape(points, (int(points.shape[0] / 6), 6))
+        lidar_data = np.array(points[:, :2])
+        lidar_data *= min(disp_size) / lidar_range
+        lidar_data += (0.5 * disp_size[0], 0.5 * disp_size[1])
+        lidar_data = np.fabs(lidar_data)  # pylint: disable=E1111
+        lidar_data = lidar_data.astype(np.int32)
+        lidar_data = np.reshape(lidar_data, (-1, 2))
+        lidar_img_size = (disp_size[0], disp_size[1], 3)
+        lidar_img = np.zeros((lidar_img_size), dtype=np.uint8)
+
+        lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
+
+
+        self.surface = pygame.surfarray.make_surface(lidar_img)
+
+        t_end = self.timer.time()
+        self.time_processing += (t_end - t_start)
+        self.tics_processing += 1
+
+    def save_radar_image(self, radar_data):
+        t_start = self.timer.time()
+        points = np.frombuffer(radar_data.raw_data, dtype=np.dtype('f4'))
+        points = np.reshape(points, (len(radar_data), 4))
+
+        t_end = self.timer.time()
+        self.time_processing += (t_end - t_start)
+        self.tics_processing += 1
+
+    def render(self):
+        if self.surface is not None:
+            return self.surface
+
+
+    def destroy(self):
+        self.sensor.destroy()
