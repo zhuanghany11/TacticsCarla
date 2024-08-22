@@ -7,5 +7,6 @@
 
 from .traffic_generator import TrafficGenerator
 from .tacticscarla_manager import TacticsCarlaManager
+from .vehicle_controller import Controller
 
-__all__ = ["TrafficGenerator", "TacticsCarlaManager"]
+__all__ = ["TrafficGenerator", "TacticsCarlaManager", "Controller"]

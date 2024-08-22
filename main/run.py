@@ -14,7 +14,7 @@ tactics_carla_manager.spawn_walkers()
 tactics_carla_manager.set_speed_difference_percentage(30.00)
 
 try:
-    tactics_carla_manager.run(step_num = 1000)
+    tactics_carla_manager.run(step_num = 10000)
 
 except KeyboardInterrupt:
     pass
